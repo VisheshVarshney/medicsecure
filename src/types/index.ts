@@ -30,6 +30,7 @@ export type Record = {
   original_name: string;
   uploaded_by: string;
   user_id: string;
+  storage_path?: string;
 };
 
 export type RecordShare = {

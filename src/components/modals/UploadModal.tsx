@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { X, FileUp, Upload as UploadIcon } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { Doctor } from '../../types';
@@ -9,18 +9,25 @@ interface UploadModalProps {
   onClose: () => void;
   doctors: Doctor[];
   onUploadComplete: () => void;
+  isPatient?: boolean;
+  patientId?: string;
+  doctorId?: string;
 }
 
 export function UploadModal({
   onClose,
   doctors,
   onUploadComplete,
+  isPatient = false,
+  patientId,
+  doctorId,
 }: UploadModalProps) {
-  const [selectedDoctors, setSelectedDoctors] = useState<string[]>([]);
+  const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
@@ -40,14 +47,16 @@ export function UploadModal({
       'image/jpeg': ['.jpg', '.jpeg'],
       'image/png': ['.png'],
       'application/msword': ['.doc'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-        ['.docx'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
     },
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file || selectedDoctors.length === 0) return;
+    if (!file || selectedRecipients.length === 0) {
+      toast.error('Please select a file and at least one recipient');
+      return;
+    }
 
     setUploading(true);
     setError(null);
@@ -57,19 +66,13 @@ export function UploadModal({
       const title = formData.get('title') as string;
       const type = formData.get('type') as string;
 
-      // Get the current user's ID
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
-
-      // Create storage path with user ID as folder
+      // Create storage path
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}.${fileExt}`;
-      const storagePath = `${user.id}/${fileName}`;
+      const storagePath = `uploads/${fileName}`;
 
-      // Upload file to storage bucket
-      const { error: uploadError, data: uploadData } = await supabase.storage
+      // Upload file to storage
+      const { error: uploadError } = await supabase.storage
         .from('medical-records')
         .upload(storagePath, file, {
           cacheControl: '3600',
@@ -79,77 +82,52 @@ export function UploadModal({
           },
         });
 
-      if (uploadError) {
-        throw new Error(`Upload failed: ${uploadError.message}`);
+      if (uploadError) throw uploadError;
+
+      // Create records for each selected recipient
+      for (const recipientId of selectedRecipients) {
+        const { error: recordError } = await supabase
+          .from('records')
+          .insert([
+            {
+              title,
+              type,
+              storage_path: storagePath,
+              file_size: file.size,
+              file_type: file.type,
+              original_name: file.name,
+              doctor_id: isPatient ? recipientId : doctorId,
+              patient_id: isPatient ? patientId : recipientId,
+              uploaded_by: isPatient ? patientId : doctorId,
+              user_id: isPatient ? patientId : doctorId,
+            },
+          ]);
+
+        if (recordError) throw recordError;
       }
-
-      if (!uploadData?.path) {
-        throw new Error('Upload failed: No file path returned');
-      }
-
-      // Get the URL for the uploaded file
-      const {
-        data: { publicUrl },
-      } = supabase.storage
-        .from('medical-records')
-        .getPublicUrl(uploadData.path);
-
-      // Create record in the database
-      const { data: record, error: recordError } = await supabase
-        .from('records')
-        .insert([
-          {
-            title,
-            type,
-            file_path: publicUrl,
-            storage_path: storagePath,
-            file_size: file.size,
-            file_type: file.type,
-            original_name: file.name,
-            user_id: user.id,
-            uploaded_by: user.email,
-          },
-        ])
-        .select()
-        .single();
-
-      if (recordError) throw recordError;
-
-      // Share with selected doctors
-      const shares = selectedDoctors.map((doctorId) => ({
-        record_id: record.id,
-        doctor_id: doctorId,
-        user_id: user.id,
-      }));
-
-      const { error: shareError } = await supabase
-        .from('record_shares')
-        .insert(shares);
-
-      if (shareError) throw shareError;
 
       toast.success('Record uploaded successfully');
       onUploadComplete();
       onClose();
-    } catch (err) {
-      console.error('Error uploading record:', err);
-      setError(
-        err instanceof Error ? err.message : 'An error occurred while uploading'
-      );
-      toast.error(
-        err instanceof Error ? err.message : 'Failed to upload record'
-      );
+    } catch (error) {
+      console.error('Error uploading record:', error);
+      setError('Failed to upload record');
+      toast.error('Failed to upload record');
     } finally {
       setUploading(false);
     }
   };
 
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString();
+  };
+
   return (
-    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-lg max-w-2xl w-full p-6">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-medium text-gray-900">
-            Upload Medical Record
+            {isPatient ? 'Share Record with Doctor' : 'Upload Medical Record'}
           </h3>
           <button
             onClick={onClose}
@@ -206,19 +184,19 @@ export function UploadModal({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Share with Doctors
+              {isPatient ? 'Share with Doctors' : 'Share with Patients'}
             </label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {doctors.map((doctor) => (
                 <div
                   key={doctor.id}
                   className={`p-3 rounded-md border cursor-pointer transition-colors ${
-                    selectedDoctors.includes(doctor.id)
+                    selectedRecipients.includes(doctor.id)
                       ? 'border-blue-500 bg-blue-50'
                       : 'border-gray-300 hover:border-blue-300'
                   }`}
                   onClick={() => {
-                    setSelectedDoctors((prev) =>
+                    setSelectedRecipients((prev) =>
                       prev.includes(doctor.id)
                         ? prev.filter((id) => id !== doctor.id)
                         : [...prev, doctor.id]
@@ -231,8 +209,8 @@ export function UploadModal({
                   <p className="text-sm text-gray-500">
                     {doctor.specialization}
                   </p>
-                  <p className="text-xs text-gray-400">
-                    {doctor.years_experience} years experience
+                  <p className="text-sm text-gray-500">
+                    {doctor.contact_email}
                   </p>
                 </div>
               ))}
@@ -293,7 +271,7 @@ export function UploadModal({
             </button>
             <button
               type="submit"
-              disabled={!file || selectedDoctors.length === 0 || uploading}
+              disabled={!file || selectedRecipients.length === 0 || uploading}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 disabled:opacity-50"
             >
               {uploading ? 'Uploading...' : 'Upload'}

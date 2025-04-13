@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
-import { toast } from 'react-hot-toast';
+import { X, AlertCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 interface DoctorAuthModalProps {
   onClose: () => void;
@@ -13,73 +12,21 @@ export function DoctorAuthModal({ onClose }: DoctorAuthModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    try {
-      // First check if the email exists in doctors table
-      const { data: doctorData, error: doctorError } = await supabase
-        .from('doctors')
-        .select('*')
-        .eq('contact_email', email)
-        .single();
-
-      if (doctorError || !doctorData) {
-        throw new Error('Doctor not found with this email');
-      }
-
-      // Try to sign in
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-
-      if (signInError) {
-        // If sign in fails, create a new account
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: doctorData.full_name,
-              is_doctor: true
-            }
-          }
-        });
-
-        if (signUpError) throw signUpError;
-
-        // Create profile for the doctor
-        if (signUpData.user) {
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .insert({
-              id: signUpData.user.id,
-              full_name: doctorData.full_name,
-              date_of_birth: new Date().toISOString(), // placeholder
-              contact_number: doctorData.contact_phone,
-              is_doctor: true,
-              doctor_id: doctorData.id,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            });
-
-          if (profileError) throw profileError;
-        }
-      }
-
-      toast.success('Logged in successfully!');
-      onClose();
-    } catch (err) {
-      console.error('Authentication error:', err);
-      setError(err instanceof Error ? err.message : 'Authentication failed');
-      toast.error(err instanceof Error ? err.message : 'Authentication failed');
-    } finally {
-      setLoading(false);
+    // Simple hardcoded check
+    if (email === 'jamesmiller@medic.com' && password === 'doctor123') {
+      navigate('/doctor-dashboard');
+    } else {
+      setError('Invalid email or password');
     }
+
+    setLoading(false);
   };
 
   const modalVariants = {
@@ -121,13 +68,15 @@ export function DoctorAuthModal({ onClose }: DoctorAuthModalProps) {
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm"
+                className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start"
               >
-                {error}
+                <AlertCircle className="h-5 w-5 text-red-400 mt-0.5 mr-2" />
+                <p className="text-sm text-red-600">{error}</p>
               </motion.div>
             )}
 
             <motion.form
+              key="login-form"
               onSubmit={handleSubmit}
               className="space-y-4"
               initial={{ opacity: 0, x: -20 }}
@@ -169,7 +118,7 @@ export function DoctorAuthModal({ onClose }: DoctorAuthModalProps) {
               </button>
 
               <p className="text-sm text-center text-gray-600">
-                For doctor access only. Please contact the administrator if you need assistance.
+                For authorized doctors only. Please contact the administrator if you need assistance.
               </p>
             </motion.form>
           </div>
